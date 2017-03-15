@@ -7,7 +7,7 @@
  */
 
 /*
- * Copyright (c) 2014, Joyent, Inc.
+ * Copyright (c) 2017, Joyent, Inc.
  */
 
 var bunyan = require('bunyan');
@@ -17,6 +17,9 @@ var lib = require('../lib');
 var manta = require('manta');
 var path = require('path');
 var sprintf = require('sprintf-js').sprintf;
+var verror = require('verror');
+
+var VE = verror.VError;
 
 
 
@@ -234,21 +237,42 @@ function checkJobResults(job, audit, opts, cb) {
                         return (cb(null));
                 }
 
-                gopts.path = parts[0];
-                lib.common.getObject(gopts, function (err2, errorLines) {
-                        if (err2) {
-                                //Don't know if it failed or not.
-                                return (cb(err2));
+                /*
+                 * In some cases, the output from an audit job can be quite
+                 * large.  We don't need to inspect the contents here, just
+                 * report on whether or not the object contained any output.
+                 */
+                var auditOutput = parts[0];
+                MANTA_CLIENT.info(auditOutput, function (infoErr, info) {
+                        if (infoErr) {
+                                cb(VE(infoErr, 'checking audit output "%s"',
+                                    auditOutput));
+                                return;
                         }
-                        if (errorLines !== '') {
-                                //Bad juju.
-                                LOG.fatal({
-                                        job: job,
-                                        outputObject: parts[0]
-                                }, 'Audit job detected abnormalities between ' +
-                                          'mako and moray.');
+
+                        if (typeof (info.size) !== 'number') {
+                                cb(VE('invalid "size" for audit output "%s"',
+                                    auditOutput));
+                                return;
                         }
-                        return (cb(null));
+
+                        if (info.size === 0) {
+                                /*
+                                 * The output object is empty, meaning the
+                                 * audit job did not report any problems.
+                                 */
+                                cb(null);
+                                return;
+                        }
+
+                        /*
+                         * Emit a log message at the FATAL level to trigger
+                         * the appropriate alarm.
+                         */
+                        LOG.fatal({ job: job, outputObject: auditOutput,
+                            outputObjectInfo: info }, 'Audit job detected ' +
+                            'abnormalities between Mako and Moray.');
+                        cb(null);
                 });
         });
 }
