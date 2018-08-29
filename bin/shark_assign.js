@@ -26,17 +26,18 @@ var mod_verror = require('verror');
 
 var EventEmitter = require('events').EventEmitter;
 var LineStream = require('lstream');
-var MemoryStream = require('memorystream'); /* XXX devDependency */
+var MemoryStream = require('memorystream');
 
 var lib_rebalancer = require('../lib/rebalancer');
 
-function PartialRebalancer(options) {
+function SharkAssign(options) {
         mod_assertplus.object(options, 'options');
         mod_assertplus.object(options.log, 'options.log');
         mod_assertplus.string(options.host, 'options.host');
         mod_assertplus.string(options.owner, 'options.owner');
         mod_assertplus.arrayOfString(options.shards, 'options.shards');
         mod_assertplus.string(options.storageShard, 'options.storageShard');
+        mod_assertplus.optionalString(options.newHost, 'options.newHost');
         mod_assertplus.optionalNumber(options.target, 'options.target');
         mod_assertplus.optionalNumber(options.split, 'options.split');
         mod_assertplus.optionalUuid(options.verify, 'options.verify');
@@ -51,6 +52,7 @@ function PartialRebalancer(options) {
         self.pr_metadata_shards = options.shards;
         self.pr_storage_shard = options.storageShard;
         self.pr_split = options.split || 10000;
+        self.pr_new_host = options.newHost || null;
 
         self.pr_verify = (options.verify) ? true : false;
         if (self.pr_verify) {
@@ -66,7 +68,7 @@ function PartialRebalancer(options) {
         self.pr_manta_user = options.manta.user;
 
         self.pr_working_directory = mod_util.format(
-            '/%s/stor/manta_partial_rebalance/do/%s/',
+            '/%s/stor/manta_shark_assign/do/%s/',
             self.pr_manta_user, self.pr_host);
 
         self.pr_progress_fmt = '%d-MOV-X-%d-X-%d-X-%s';
@@ -97,9 +99,9 @@ function PartialRebalancer(options) {
 
         self.connect();
 }
-mod_util.inherits(PartialRebalancer, EventEmitter);
+mod_util.inherits(SharkAssign, EventEmitter);
 
-PartialRebalancer.prototype.connect = function () {
+SharkAssign.prototype.connect = function () {
         var self = this;
 
         mod_vasync.pipeline({ funcs: [
@@ -159,7 +161,7 @@ PartialRebalancer.prototype.connect = function () {
         });
 };
 
-PartialRebalancer.prototype.init = function (callback) {
+SharkAssign.prototype.init = function (callback) {
         var self = this;
 
         mod_vasync.pipeline({ funcs: [
@@ -179,7 +181,7 @@ PartialRebalancer.prototype.init = function (callback) {
         ] }, callback);
 };
 
-PartialRebalancer.prototype.start = function () {
+SharkAssign.prototype.start = function () {
         var self = this;
 
         self.pr_log.info({
@@ -208,7 +210,7 @@ PartialRebalancer.prototype.start = function () {
         });
 };
 
-PartialRebalancer.prototype.stop = function () {
+SharkAssign.prototype.stop = function () {
         var self = this;
 
         self.close();
@@ -216,7 +218,7 @@ PartialRebalancer.prototype.stop = function () {
         self.pr_stopped = new Date();
 };
 
-PartialRebalancer.prototype.close = function () {
+SharkAssign.prototype.close = function () {
         var self = this;
 
         self.pr_manta_client.close();
@@ -227,7 +229,7 @@ PartialRebalancer.prototype.close = function () {
         });
 };
 
-PartialRebalancer.prototype.wantSync = function () {
+SharkAssign.prototype.wantSync = function () {
         var self = this;
 
         return (self.pr_move.entries.length > 0 &&
@@ -235,10 +237,11 @@ PartialRebalancer.prototype.wantSync = function () {
             !self.pr_verify);
 };
 
-PartialRebalancer.prototype.getApplicableSharks = function (callback) {
+SharkAssign.prototype.getApplicableSharks = function (callback) {
         var self = this;
 
         var sharks = {};
+        var sharksFound = 0;
 
         var req = self.pr_moray_clients['storage'].findObjects('manta_storage',
             '(manta_storage_id=*)', {});
@@ -254,10 +257,13 @@ PartialRebalancer.prototype.getApplicableSharks = function (callback) {
                 if (mantaStorageId === self.pr_host) {
                         return;
                 }
-                if (!sharks[dc]) {
-                        sharks[dc] = [];
+                /*
+                 * XXX This is wasteful.  If we're looking for a particular host
+                 * then we should just drop that into the query to moray.
+                 */
+                if (self.pr_new_host && mantaStorageId !== self.pr_new_host) {
+                        return;
                 }
-
                 /*
                  * XXX Should this be a CLI option?
                  */
@@ -265,6 +271,11 @@ PartialRebalancer.prototype.getApplicableSharks = function (callback) {
                         return;
                 }
 
+                if (!sharks[dc]) {
+                        sharks[dc] = [];
+                }
+
+                sharksFound++;
                 sharks[dc].push({
                     'manta_storage_id': mantaStorageId,
                     'datacenter': dc
@@ -272,11 +283,16 @@ PartialRebalancer.prototype.getApplicableSharks = function (callback) {
         });
 
         req.once('end', function () {
-                self.pr_sharks = sharks;
-
                 self.pr_log.debug({
-                    sharks: self.pr_sharks
+                    sharks: sharks
                 }, 'full shark list');
+
+                if (sharksFound === 0) {
+                        callback(new mod_verror.VError('found no sharks'));
+                        return;
+                }
+
+                self.pr_sharks = sharks;
 
                 var per_az = {};
 
@@ -292,7 +308,7 @@ PartialRebalancer.prototype.getApplicableSharks = function (callback) {
         });
 };
 
-PartialRebalancer.prototype.getProgress = function (callback) {
+SharkAssign.prototype.getProgress = function (callback) {
         var self = this;
 
         self.getProgressNamesManta(function (err, names) {
@@ -353,7 +369,7 @@ PartialRebalancer.prototype.getProgress = function (callback) {
         });
 };
 
-PartialRebalancer.prototype.lookupObject = function () {
+SharkAssign.prototype.lookupObject = function () {
         var self = this;
 
         return (function lookupObject(uuid, _, callback) {
@@ -469,12 +485,12 @@ PartialRebalancer.prototype.lookupObject = function () {
         });
 };
 
-PartialRebalancer.prototype.sync = function (callback) {
+SharkAssign.prototype.sync = function (callback) {
         var self = this;
 
         mod_vasync.pipeline({ funcs: [
-            function rebalanceObjects(_, cb) {
-                self.rebalanceObjects(cb);
+            function assignNewShark(_, cb) {
+                self.assignNewShark(cb);
             },
             function saveProgress(_, cb) {
                 self.saveProgressManta(cb);
@@ -482,7 +498,7 @@ PartialRebalancer.prototype.sync = function (callback) {
         ] }, callback);
 };
 
-PartialRebalancer.prototype.progress = function () {
+SharkAssign.prototype.progress = function () {
         var self = this;
 
         var rv = {
@@ -493,7 +509,7 @@ PartialRebalancer.prototype.progress = function () {
         return (rv);
 };
 
-PartialRebalancer.prototype.saveProgressManta = function (callback) {
+SharkAssign.prototype.saveProgressManta = function (callback) {
         var self = this;
 
         var objectId = self.pr_move.entries[
@@ -549,7 +565,7 @@ PartialRebalancer.prototype.saveProgressManta = function (callback) {
         });
 };
 
-PartialRebalancer.prototype.updateProgress = function () {
+SharkAssign.prototype.updateProgress = function () {
         var self = this;
 
         self.pr_progress.seq++;
@@ -562,27 +578,32 @@ PartialRebalancer.prototype.updateProgress = function () {
         self.pr_move.bytes = 0;
 };
 
-PartialRebalancer.prototype.rebalanceObjects = function (callback) {
+SharkAssign.prototype.assignNewShark = function (callback) {
         var self = this;
 
         var errors = [];
-        var rebalanced = 0;
+        var reassigned = 0;
 
         self.pr_move.entries.forEach(function (o) {
-                var r = lib_rebalancer.checkForMantaStorageId(
+                var assignment = lib_rebalancer.checkForMantaStorageId(
                     o,
                     self.pr_sharks,
                     self.pr_host);
 
-                if (!r) {
+                if (!assignment) {
                         errors.push({
                             object: o
                         });
                         return;
                 }
 
-                o.oldShark = r.oldShark;
-                o.newShark = r.newShark;
+                mod_assertplus.object(assignment.oldShark,
+                    'assignment.oldShark');
+                mod_assertplus.object(assignment.newShark,
+                    'assignment.newShark');
+
+                o.oldShark = assignment.oldShark;
+                o.newShark = assignment.newShark;
                 o.key = o._value.key;
                 o.morayEtag = o._etag;
                 o.md5 = o._value.contentMD5;
@@ -590,7 +611,7 @@ PartialRebalancer.prototype.rebalanceObjects = function (callback) {
                 o.owner = o._value.owner;
                 o.etag = o._value.etag;
 
-                rebalanced++;
+                reassigned++;
         });
 
         /*
@@ -598,13 +619,13 @@ PartialRebalancer.prototype.rebalanceObjects = function (callback) {
          * explained via callbacks.
          */
         mod_assertplus.equal(errors.length, 0, 'there were errors!');
-        mod_assertplus.equal(rebalanced, self.pr_move.entries.length,
-            'not enough rebalanced');
+        mod_assertplus.equal(reassigned, self.pr_move.entries.length,
+            'not enough reassigned');
 
         callback();
 };
 
-PartialRebalancer.prototype.getProgressNamesManta = function (callback) {
+SharkAssign.prototype.getProgressNamesManta = function (callback) {
         var self = this;
 
         var names = [];
@@ -714,7 +735,7 @@ function parseOptions(opts) {
         var option;
 
         opts.shards = opts.shards || [];
-        var parser = new mod_getopt.BasicParser('o:d:t:x:h:V:v',
+        var parser = new mod_getopt.BasicParser('o:d:t:x:h:V:n:v',
             process.argv);
         while ((option = parser.getopt()) !== undefined) {
                 if (option.error) {
@@ -735,7 +756,15 @@ function parseOptions(opts) {
                         opts.host = option.optarg;
                         break;
                 case 'V':
+                        /*
+                         * XXX Could very well be a bool if explicitly
+                         * reassigning, or if we'de like to verify the full
+                         * input stream.
+                         */
                         opts.verify = option.optarg;
+                        break;
+                case 'n':
+                        opts.newHost = option.optarg;
                         break;
                 case 'v':
                         opts.verbose = true;
@@ -750,6 +779,11 @@ function parseOptions(opts) {
                 usage('Storage shard is required.');
         }
 
+        /*
+         * XXX Target is only required if not verifying and not explicitly
+         * reassigning.
+         * XXX In fact, target is entirely optional?
+         */
         if (!opts.target && !opts.verify) {
                 usage('Target (in GiB) is required.');
         }
@@ -796,25 +830,25 @@ function main() {
         var options = parseOptions(config);
 
         var log = mod_bunyan.createLogger({
-            'name': 'partialrebalancer',
+            'name': 'sharkassign',
             'level': (options.verbose) ? 'debug' : 'info'
         });
 
         options.log = log;
 
-        var rebalancer = new PartialRebalancer(options);
+        var assigner = new SharkAssign(options);
 
-        rebalancer.on('connect', function () {
-                rebalancer.start();
+        assigner.on('connect', function () {
+                assigner.start();
         });
 
-        rebalancer.on('error', function (err) {
-                log.fatal(err, 'failed to rebalance input');
-                rebalancer.stop();
+        assigner.on('error', function (err) {
+                log.fatal(err, 'failed to reassign input');
+                assigner.stop();
         });
 
-        rebalancer.on('done', function () {
-                rebalancer.stop();
+        assigner.on('done', function () {
+                assigner.stop();
                 log.info('done');
         });
 }
