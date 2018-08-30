@@ -51,18 +51,17 @@ function SharkAssign(options) {
         self.sa_owner = options.owner;
         self.sa_metadata_shards = options.shards;
         self.sa_storage_shard = options.storageShard;
+        self.sa_target = options.target || null;
         self.sa_split = options.split || 10000;
         self.sa_new_host = options.newHost || null;
 
         self.sa_verify = (options.verify) ? true : false;
         if (self.sa_verify) {
-                self.sa_marker = options.verify;
+                self.sa_marker = options.verify || null;
                 self.sa_started = true;
-                self.sa_target = options.null;
         } else {
                 self.sa_marker = null;
                 self.sa_started = false;
-                self.sa_target = options.target;
         }
 
         self.sa_manta_user = options.manta.user;
@@ -71,7 +70,7 @@ function SharkAssign(options) {
             '/%s/stor/manta_shark_assign/do/%s/',
             self.sa_manta_user, self.sa_host);
 
-        self.sa_progress_fmt = '%d-MOV-X-%d-X-%d-X-%s';
+        self.sa_progress_fmt = '%d-MOV-X-%d-X-%d-X-%s-X-%s';
 
         self.sa_progress = {
             'bytes': 0,
@@ -194,11 +193,9 @@ SharkAssign.prototype.start = function () {
 
         self.sa_input_stream.pipe(line_stream).pipe(self.sa_work_stream);
 
-        self.sa_work_stream.on('end', function () {
-                self.sa_log.info({
-                }, 'reached the end of input stream');
-
-                self.emit('done');
+        self.sa_input_stream.on('end', function () {
+                //self.sa_log.info('reached the end of input stream');
+                //self.emit('done');
         });
 
         self.sa_work_stream.on('enough', function () {
@@ -365,6 +362,10 @@ SharkAssign.prototype.getProgress = function (callback) {
 
                 self.sa_progress['seq'] = seqs[seqs.length - 1] + 1;
 
+                self.sa_log.info({
+                    progress: self.sa_progress
+                }, 'got progress; continuing');
+
                 callback();
         });
 };
@@ -373,7 +374,8 @@ SharkAssign.prototype.lookupObject = function () {
         var self = this;
 
         return (function lookupObject(uuid, _, callback) {
-                if (self.sa_progress.bytes >= self.sa_target) {
+                if (self.sa_target &&
+                    self.sa_progress.bytes >= self.sa_target) {
                         self.sa_log.info({
                             progress: self.progress()
                         }, 'made enough progress; stopping');
@@ -384,20 +386,12 @@ SharkAssign.prototype.lookupObject = function () {
                         self.sa_log.info({
                             progress: self.progress()
                         }, 'marker found');
-                        self.sa_progress.started = true;
+                        self.sa_started = true;
                         callback();
                         return;
                 }
                 if (!self.sa_started) {
                         callback();
-                        return;
-                }
-
-                if (self.sa_verify && uuid === self.sa_marker) {
-                        self.sa_log.info({
-                            marker: self.sa_marker
-                        }, 'found marker in verification mode');
-                        self.sa_work_stream.emit('enough');
                         return;
                 }
 
@@ -464,7 +458,7 @@ SharkAssign.prototype.lookupObject = function () {
                             _key: metadata.key,
                             _value: metadata.value,
                             _etag: metadata._etag,
-                            objectid: metadata.value.objectid,
+                            objectid: metadata.value.objectId,
                             type: metadata.value.type
                         };
 
@@ -474,6 +468,14 @@ SharkAssign.prototype.lookupObject = function () {
                         next();
 
                     }, function trySync(next) {
+                        if (self.sa_verify && uuid === self.sa_marker) {
+                                self.sa_log.info({
+                                    marker: self.sa_marker
+                                }, 'found marker in verification mode');
+                                self.sa_work_stream.emit('enough');
+                                return;
+                        }
+
                         if (!self.wantSync()) {
                                 next();
                                 return;
@@ -519,7 +521,8 @@ SharkAssign.prototype.saveProgressManta = function (callback) {
             self.sa_progress.seq,
             self.sa_move.entries.length,
             self.sa_move.bytes,
-            objectId);
+            objectId,
+            self.sa_owner);
 
         self.sa_log.info({
             location: self.sa_working_directory + filename
@@ -585,15 +588,23 @@ SharkAssign.prototype.assignNewShark = function (callback) {
         var reassigned = 0;
 
         self.sa_move.entries.forEach(function (o) {
-                var assignment = lib_rebalancer.checkForMantaStorageId(
-                    o,
-                    self.sa_sharks,
-                    self.sa_host);
+                var assignment, err;
 
-                if (!assignment) {
-                        errors.push({
-                            object: o
-                        });
+                try {
+                    assignment = lib_rebalancer.checkForMantaStorageId(
+                        o,
+                        self.sa_sharks,
+                        self.sa_host);
+                } catch (e) {
+                    err = new mod_verror.VError(e, 'failed to assign shark ' +
+                        'for objectid "%s"', o._value.objectId);
+                    self.sa_log.debug({
+                        object: o
+                    }, err.message);
+                }
+
+                if (err) {
+                        errors.push(err);
                         return;
                 }
 
@@ -639,7 +650,9 @@ SharkAssign.prototype.getProgressNamesManta = function (callback) {
                         return;
                 }
                 res.on('object', function (o) {
-                        names.push(o.name);
+                        if (o.name.indexOf(self.sa_owner) !== -1) {
+                                names.push(o.name);
+                        }
                 });
                 res.once('error', callback);
                 res.once('end', function () {
@@ -701,8 +714,8 @@ function findObjectOnline(opts, lookup, callback) {
                 var req = c.findObjects('manta', query, {});
 
                 req.once('error', function (err) {
-                        errors.push(new verror.VError(err, 'failed to query ' +
-                            '%s', shard));
+                        errors.push(new mod_verror.VError(err,
+                            'failed to query "%s"', shard));
                         next();
                         return;
                 });
@@ -736,7 +749,7 @@ function parseOptions(opts) {
         var option;
 
         opts.shards = opts.shards || [];
-        var parser = new mod_getopt.BasicParser('o:d:t:x:h:V:n:v',
+        var parser = new mod_getopt.BasicParser('o:d:t:x:h:n:V:v',
             process.argv);
         while ((option = parser.getopt()) !== undefined) {
                 if (option.error) {
@@ -758,11 +771,14 @@ function parseOptions(opts) {
                         break;
                 case 'V':
                         /*
-                         * XXX Could very well be a bool if explicitly
-                         * reassigning, or if we'de like to verify the full
-                         * input stream.
+                         * If this isn't a UUID then we're expecting to verify
+                         * the full contents of the input stream.
                          */
-                        opts.verify = option.optarg;
+                        if (!option.optarg) {
+                                opts.verify = true;
+                        } else {
+                                opts.verify = option.optarg;
+                        }
                         break;
                 case 'n':
                         opts.newHost = option.optarg;
@@ -780,17 +796,12 @@ function parseOptions(opts) {
                 usage('Storage shard is required.');
         }
 
-        /*
-         * XXX Target is only required if not verifying and not explicitly
-         * reassigning.
-         * XXX In fact, target is entirely optional?
-         */
-        if (!opts.target && !opts.verify) {
-                usage('Target (in GiB) is required.');
-        }
-
         if (!opts.host) {
                 usage('Host is required.');
+        }
+
+        if (opts.target && opts.verify) {
+                usage('-t and -V cannot be used together.');
         }
 
         if (opts.split) {
@@ -812,12 +823,14 @@ function usage(msg) {
                 console.error(msg);
         }
         var str  = 'usage: ' + mod_path.basename(process.argv[1]);
-        str += ' [-u] owner_uuid';
-        str += ' [-d] working_directory';
+        str += ' [-o] owner_uuid';
+        str += ' [-h] storage_id';
+        str += ' [-n] storage_id';
         str += ' [-t] target_in_gib';
         str += ' [-x] split';
-        str += ' [-i] ignore_sharks';
         str += ' [-s] storage_shard';
+        str += ' [-V] uuid';
+        str += ' [-v]';
         console.error(str);
         process.exit(1);
 }
@@ -834,6 +847,10 @@ function main() {
             'name': 'sharkassign',
             'level': (options.verbose) ? 'debug' : 'info'
         });
+
+        log.info({
+            options: options
+        }, 'got options');
 
         options.log = log;
 
