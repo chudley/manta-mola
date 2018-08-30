@@ -46,54 +46,54 @@ function SharkAssign(options) {
 
         var self = this;
 
-        self.pr_log = options.log;
-        self.pr_host = options.host;
-        self.pr_owner = options.owner;
-        self.pr_metadata_shards = options.shards;
-        self.pr_storage_shard = options.storageShard;
-        self.pr_split = options.split || 10000;
-        self.pr_new_host = options.newHost || null;
+        self.sa_log = options.log;
+        self.sa_host = options.host;
+        self.sa_owner = options.owner;
+        self.sa_metadata_shards = options.shards;
+        self.sa_storage_shard = options.storageShard;
+        self.sa_split = options.split || 10000;
+        self.sa_new_host = options.newHost || null;
 
-        self.pr_verify = (options.verify) ? true : false;
-        if (self.pr_verify) {
-                self.pr_marker = options.verify;
-                self.pr_started = true;
-                self.pr_target = options.null;
+        self.sa_verify = (options.verify) ? true : false;
+        if (self.sa_verify) {
+                self.sa_marker = options.verify;
+                self.sa_started = true;
+                self.sa_target = options.null;
         } else {
-                self.pr_marker = null;
-                self.pr_started = false;
-                self.pr_target = options.target;
+                self.sa_marker = null;
+                self.sa_started = false;
+                self.sa_target = options.target;
         }
 
-        self.pr_manta_user = options.manta.user;
+        self.sa_manta_user = options.manta.user;
 
-        self.pr_working_directory = mod_util.format(
+        self.sa_working_directory = mod_util.format(
             '/%s/stor/manta_shark_assign/do/%s/',
-            self.pr_manta_user, self.pr_host);
+            self.sa_manta_user, self.sa_host);
 
-        self.pr_progress_fmt = '%d-MOV-X-%d-X-%d-X-%s';
+        self.sa_progress_fmt = '%d-MOV-X-%d-X-%d-X-%s';
 
-        self.pr_progress = {
+        self.sa_progress = {
             'bytes': 0,
             'count': 0,
             'seq': 0
         };
 
-        self.pr_move = {
+        self.sa_move = {
             'bytes': 0,
             'entries': []
         };
-        self.pr_sharks = {};
-        self.pr_moray_clients = {
+        self.sa_sharks = {};
+        self.sa_moray_clients = {
             'storage': null,
             'metadata': {}
         };
-        self.pr_moray_connect_timeout = 1000;
-        self.pr_moray_port = 2020;
+        self.sa_moray_connect_timeout = 1000;
+        self.sa_moray_port = 2020;
 
-        self.pr_input_stream = process.stdin;
-        self.pr_work_stream = new mod_stream.Writable({ objectMode: true });
-        self.pr_manta_client = mod_manta.createClient(options.manta);
+        self.sa_input_stream = process.stdin;
+        self.sa_work_stream = new mod_stream.Writable({ objectMode: true });
+        self.sa_manta_client = mod_manta.createClient(options.manta);
 
         EventEmitter.call(self);
 
@@ -107,33 +107,33 @@ SharkAssign.prototype.connect = function () {
         mod_vasync.pipeline({ funcs: [
             function connectToStorageShard(_, next) {
                 var client = mod_moray.createClient({
-                    log: self.pr_log,
-                    connectTimeout: self.pr_moray_connect_timeout,
-                    host: self.pr_storage_shard,
-                    port: self.pr_moray_port
+                    log: self.sa_log,
+                    connectTimeout: self.sa_moray_connect_timeout,
+                    host: self.sa_storage_shard,
+                    port: self.sa_moray_port
                 });
                 client.on('error', next);
                 client.on('connect', function () {
-                        self.pr_moray_clients['storage'] = client;
-                        self.pr_log.info({
-                            shard: self.pr_storage_shard
+                        self.sa_moray_clients['storage'] = client;
+                        self.sa_log.info({
+                            shard: self.sa_storage_shard
                         }, 'connected to storage shard');
                         next();
                 });
             },
             function connectToMetadataShards(_, next) {
                 mod_vasync.forEachParallel({
-                    inputs: self.pr_metadata_shards,
+                    inputs: self.sa_metadata_shards,
                     func: function (shard, cb) {
                         var client = mod_moray.createClient({
-                            log: self.pr_log,
-                            connectTimeout: self.pr_moray_connect_timeout,
+                            log: self.sa_log,
+                            connectTimeout: self.sa_moray_connect_timeout,
                             host: shard,
-                            port: self.pr_moray_port
+                            port: self.sa_moray_port
                         });
                         client.on('error', cb);
                         client.on('connect', function () {
-                                self.pr_moray_clients['metadata'][shard] =
+                                self.sa_moray_clients['metadata'][shard] =
                                     client;
                                 cb();
                         });
@@ -143,8 +143,8 @@ SharkAssign.prototype.connect = function () {
                                 next(err);
                                 return;
                         }
-                        self.pr_log.info({
-                            shards: self.pr_metadata_shards
+                        self.sa_log.info({
+                            shards: self.sa_metadata_shards
                         }, 'connected to metadata shards');
                         next();
                 });
@@ -169,10 +169,10 @@ SharkAssign.prototype.init = function (callback) {
                 self.getApplicableSharks(next);
             },
             function setupWorkingDirectory(_, next) {
-                self.pr_manta_client.mkdirp(self.pr_working_directory, next);
+                self.sa_manta_client.mkdirp(self.sa_working_directory, next);
             },
             function getProgress(_, next) {
-                if (self.pr_verify) {
+                if (self.sa_verify) {
                         next();
                         return;
                 }
@@ -184,28 +184,28 @@ SharkAssign.prototype.init = function (callback) {
 SharkAssign.prototype.start = function () {
         var self = this;
 
-        self.pr_log.info({
-            verify: self.pr_verify
+        self.sa_log.info({
+            verify: self.sa_verify
         }, 'starting work');
 
         var line_stream = new LineStream();
 
-        self.pr_work_stream._write = self.lookupObject();
+        self.sa_work_stream._write = self.lookupObject();
 
-        self.pr_input_stream.pipe(line_stream).pipe(self.pr_work_stream);
+        self.sa_input_stream.pipe(line_stream).pipe(self.sa_work_stream);
 
-        self.pr_work_stream.on('end', function () {
-                self.pr_log.info({
+        self.sa_work_stream.on('end', function () {
+                self.sa_log.info({
                 }, 'reached the end of input stream');
 
                 self.emit('done');
         });
 
-        self.pr_work_stream.on('enough', function () {
+        self.sa_work_stream.on('enough', function () {
                 self.emit('done');
         });
 
-        self.pr_work_stream.on('error', function (err) {
+        self.sa_work_stream.on('error', function (err) {
                 self.emit('error', err);
         });
 };
@@ -215,15 +215,15 @@ SharkAssign.prototype.stop = function () {
 
         self.close();
 
-        self.pr_stopped = new Date();
+        self.sa_stopped = new Date();
 };
 
 SharkAssign.prototype.close = function () {
         var self = this;
 
-        self.pr_manta_client.close();
-        self.pr_moray_clients['storage'].close();
-        mod_jsprim.forEachKey(self.pr_moray_clients['metadata'],
+        self.sa_manta_client.close();
+        self.sa_moray_clients['storage'].close();
+        mod_jsprim.forEachKey(self.sa_moray_clients['metadata'],
             function (shard, client) {
                 client.close();
         });
@@ -232,9 +232,9 @@ SharkAssign.prototype.close = function () {
 SharkAssign.prototype.wantSync = function () {
         var self = this;
 
-        return (self.pr_move.entries.length > 0 &&
-            self.pr_move.entries.length % self.pr_split === 0 &&
-            !self.pr_verify);
+        return (self.sa_move.entries.length > 0 &&
+            self.sa_move.entries.length % self.sa_split === 0 &&
+            !self.sa_verify);
 };
 
 SharkAssign.prototype.getApplicableSharks = function (callback) {
@@ -243,7 +243,7 @@ SharkAssign.prototype.getApplicableSharks = function (callback) {
         var sharks = {};
         var sharksFound = 0;
 
-        var req = self.pr_moray_clients['storage'].findObjects('manta_storage',
+        var req = self.sa_moray_clients['storage'].findObjects('manta_storage',
             '(manta_storage_id=*)', {});
 
         req.once('error', callback);
@@ -254,14 +254,14 @@ SharkAssign.prototype.getApplicableSharks = function (callback) {
                 var percentUsed = obj.value.percentUsed;
 
                 //Filter out host if we're migrating away from it.
-                if (mantaStorageId === self.pr_host) {
+                if (mantaStorageId === self.sa_host) {
                         return;
                 }
                 /*
                  * XXX This is wasteful.  If we're looking for a particular host
                  * then we should just drop that into the query to moray.
                  */
-                if (self.pr_new_host && mantaStorageId !== self.pr_new_host) {
+                if (self.sa_new_host && mantaStorageId !== self.sa_new_host) {
                         return;
                 }
                 /*
@@ -283,7 +283,7 @@ SharkAssign.prototype.getApplicableSharks = function (callback) {
         });
 
         req.once('end', function () {
-                self.pr_log.debug({
+                self.sa_log.debug({
                     sharks: sharks
                 }, 'full shark list');
 
@@ -292,15 +292,15 @@ SharkAssign.prototype.getApplicableSharks = function (callback) {
                         return;
                 }
 
-                self.pr_sharks = sharks;
+                self.sa_sharks = sharks;
 
                 var per_az = {};
 
-                Object.keys(self.pr_sharks).forEach(function (az) {
-                        per_az[az] = self.pr_sharks[az].length;
+                Object.keys(self.sa_sharks).forEach(function (az) {
+                        per_az[az] = self.sa_sharks[az].length;
                 });
 
-                self.pr_log.info({
+                self.sa_log.info({
                     sharksPerAz: per_az
                 }, 'got sharks');
 
@@ -318,8 +318,8 @@ SharkAssign.prototype.getProgress = function (callback) {
                 }
 
                 if (names.length === 0) {
-                        self.pr_started = new Date();
-                        self.pr_log.info({
+                        self.sa_started = new Date();
+                        self.sa_log.info({
                             progress: self.progress()
                         }, 'no progress found; starting from scratch');
                         callback();
@@ -347,7 +347,7 @@ SharkAssign.prototype.getProgress = function (callback) {
                 });
 
                 if (seqs[0] !== 0) {
-                    self.pr_log.warn({
+                    self.sa_log.warn({
                         files: files
                     }, 'sequence does not start at 0');
                     callback(new mod_verror.VError('found progress, but some ' +
@@ -358,12 +358,12 @@ SharkAssign.prototype.getProgress = function (callback) {
 
                 seqs.forEach(function (seq) {
                         var f = files[seq];
-                        self.pr_progress['count'] += f.count;
-                        self.pr_progress['bytes'] += f.bytes;
-                        self.pr_marker = f.marker;
+                        self.sa_progress['count'] += f.count;
+                        self.sa_progress['bytes'] += f.bytes;
+                        self.sa_marker = f.marker;
                 });
 
-                self.pr_progress['seq'] = seqs[seqs.length - 1] + 1;
+                self.sa_progress['seq'] = seqs[seqs.length - 1] + 1;
 
                 callback();
         });
@@ -373,31 +373,31 @@ SharkAssign.prototype.lookupObject = function () {
         var self = this;
 
         return (function lookupObject(uuid, _, callback) {
-                if (self.pr_progress.bytes >= self.pr_target) {
-                        self.pr_log.info({
+                if (self.sa_progress.bytes >= self.sa_target) {
+                        self.sa_log.info({
                             progress: self.progress()
                         }, 'made enough progress; stopping');
-                        self.pr_work_stream.emit('enough');
+                        self.sa_work_stream.emit('enough');
                         return;
                 }
-                if (uuid === self.pr_marker && !self.pr_started) {
-                        self.pr_log.info({
+                if (uuid === self.sa_marker && !self.sa_started) {
+                        self.sa_log.info({
                             progress: self.progress()
                         }, 'marker found');
-                        self.pr_progress.started = true;
+                        self.sa_progress.started = true;
                         callback();
                         return;
                 }
-                if (!self.pr_started) {
+                if (!self.sa_started) {
                         callback();
                         return;
                 }
 
-                if (self.pr_verify && uuid === self.pr_marker) {
-                        self.pr_log.info({
-                            marker: self.pr_marker
+                if (self.sa_verify && uuid === self.sa_marker) {
+                        self.sa_log.info({
+                            marker: self.sa_marker
                         }, 'found marker in verification mode');
-                        self.pr_work_stream.emit('enough');
+                        self.sa_work_stream.emit('enough');
                         return;
                 }
 
@@ -405,12 +405,12 @@ SharkAssign.prototype.lookupObject = function () {
                     function doLookup(next) {
                         var lookup = {
                                 objectid: uuid,
-                                owner: self.pr_owner
+                                owner: self.sa_owner
                         };
 
                         var options = {
-                            clients: self.pr_moray_clients['metadata'],
-                            log: self.pr_log,
+                            clients: self.sa_moray_clients['metadata'],
+                            log: self.sa_log,
                             concurrency: 1
                         };
 
@@ -433,7 +433,7 @@ SharkAssign.prototype.lookupObject = function () {
                         var sharks = metadata.value.sharks;
                         var foundShark = false;
                         sharks.forEach(function (shark) {
-                                if (shark.manta_storage_id === self.pr_host) {
+                                if (shark.manta_storage_id === self.sa_host) {
                                         foundShark = true;
                                 }
                         });
@@ -443,8 +443,8 @@ SharkAssign.prototype.lookupObject = function () {
                                 return;
                         }
 
-                        if (self.pr_verify) {
-                                self.pr_log.warn({
+                        if (self.sa_verify) {
+                                self.sa_log.warn({
                                     sharks: sharks,
                                     metadata: metadata
                                 }, 'found stuff to do in verification mode');
@@ -468,8 +468,8 @@ SharkAssign.prototype.lookupObject = function () {
                             type: metadata.value.type
                         };
 
-                        self.pr_move.bytes += metadata.value.contentLength;
-                        self.pr_move.entries.push(fauxPg);
+                        self.sa_move.bytes += metadata.value.contentLength;
+                        self.sa_move.entries.push(fauxPg);
 
                         next();
 
@@ -502,8 +502,8 @@ SharkAssign.prototype.progress = function () {
         var self = this;
 
         var rv = {
-            'GiB': Math.round((self.pr_progress.bytes / 1024 / 1024 / 1024)),
-            'objects': self.pr_progress.count
+            'GiB': Math.round((self.sa_progress.bytes / 1024 / 1024 / 1024)),
+            'objects': self.sa_progress.count
         };
 
         return (rv);
@@ -512,20 +512,20 @@ SharkAssign.prototype.progress = function () {
 SharkAssign.prototype.saveProgressManta = function (callback) {
         var self = this;
 
-        var objectId = self.pr_move.entries[
-            self.pr_move.entries.length - 1]._value.objectId;
+        var objectId = self.sa_move.entries[
+            self.sa_move.entries.length - 1]._value.objectId;
 
-        var filename = mod_util.format(self.pr_progress_fmt,
-            self.pr_progress.seq,
-            self.pr_move.entries.length,
-            self.pr_move.bytes,
+        var filename = mod_util.format(self.sa_progress_fmt,
+            self.sa_progress.seq,
+            self.sa_move.entries.length,
+            self.sa_move.bytes,
             objectId);
 
-        self.pr_log.info({
-            location: self.pr_working_directory + filename
+        self.sa_log.info({
+            location: self.sa_working_directory + filename
         }, 'saving progress to manta');
 
-        self.pr_manta_client.mkdirp(self.pr_working_directory, function (err) {
+        self.sa_manta_client.mkdirp(self.sa_working_directory, function (err) {
                 if (err) {
                         callback(err);
                         return;
@@ -535,7 +535,7 @@ SharkAssign.prototype.saveProgressManta = function (callback) {
                 var md5 = mod_crypto.createHash('md5').update(data)
                     .digest('base64');
 
-                self.pr_move.entries.forEach(function (e) {
+                self.sa_move.entries.forEach(function (e) {
                         data += JSON.stringify(e, null, 0) + '\n';
                 });
                 var o = {
@@ -544,8 +544,8 @@ SharkAssign.prototype.saveProgressManta = function (callback) {
                     size: Buffer.byteLength(data)
                 };
                 var mstream = new MemoryStream();
-                var wstream = self.pr_manta_client.createWriteStream(
-                    self.pr_working_directory + filename, o);
+                var wstream = self.sa_manta_client.createWriteStream(
+                    self.sa_working_directory + filename, o);
 
                 mstream.pipe(wstream);
 
@@ -554,8 +554,8 @@ SharkAssign.prototype.saveProgressManta = function (callback) {
 
                         self.updateProgress();
 
-                        self.pr_log.info({
-                            location: self.pr_working_directory + filename,
+                        self.sa_log.info({
+                            location: self.sa_working_directory + filename,
                             progress: self.progress()
                         }, 'progress saved');
 
@@ -568,14 +568,14 @@ SharkAssign.prototype.saveProgressManta = function (callback) {
 SharkAssign.prototype.updateProgress = function () {
         var self = this;
 
-        self.pr_progress.seq++;
-        self.pr_progress.bytes += self.pr_move.bytes;
-        self.pr_progress.count += self.pr_move.entries.length;
-        self.pr_marker = self.pr_move.entries[
-            self.pr_move.entries.length - 1]._value.objectId;
+        self.sa_progress.seq++;
+        self.sa_progress.bytes += self.sa_move.bytes;
+        self.sa_progress.count += self.sa_move.entries.length;
+        self.sa_marker = self.sa_move.entries[
+            self.sa_move.entries.length - 1]._value.objectId;
 
-        self.pr_move.entries = [];
-        self.pr_move.bytes = 0;
+        self.sa_move.entries = [];
+        self.sa_move.bytes = 0;
 };
 
 SharkAssign.prototype.assignNewShark = function (callback) {
@@ -584,11 +584,11 @@ SharkAssign.prototype.assignNewShark = function (callback) {
         var errors = [];
         var reassigned = 0;
 
-        self.pr_move.entries.forEach(function (o) {
+        self.sa_move.entries.forEach(function (o) {
                 var assignment = lib_rebalancer.checkForMantaStorageId(
                     o,
-                    self.pr_sharks,
-                    self.pr_host);
+                    self.sa_sharks,
+                    self.sa_host);
 
                 if (!assignment) {
                         errors.push({
@@ -619,7 +619,7 @@ SharkAssign.prototype.assignNewShark = function (callback) {
          * explained via callbacks.
          */
         mod_assertplus.equal(errors.length, 0, 'there were errors!');
-        mod_assertplus.equal(reassigned, self.pr_move.entries.length,
+        mod_assertplus.equal(reassigned, self.sa_move.entries.length,
             'not enough reassigned');
 
         callback();
@@ -632,7 +632,7 @@ SharkAssign.prototype.getProgressNamesManta = function (callback) {
         /*
          * XXX pagination is missing
          */
-        self.pr_manta_client.ls(self.pr_working_directory, { type: 'object' },
+        self.sa_manta_client.ls(self.sa_working_directory, { type: 'object' },
             function (err, res) {
                 if (err) {
                         callback(err);
@@ -701,7 +701,8 @@ function findObjectOnline(opts, lookup, callback) {
                 var req = c.findObjects('manta', query, {});
 
                 req.once('error', function (err) {
-                        errors.push(err);
+                        errors.push(new verror.VError(err, 'failed to query ' +
+                            '%s', shard));
                         next();
                         return;
                 });
