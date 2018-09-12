@@ -191,11 +191,18 @@ SharkAssign.prototype.start = function () {
 
         self.sa_work_stream._write = self.lookupObject();
 
-        self.sa_input_stream.pipe(line_stream).pipe(self.sa_work_stream);
+        var pipeline = self.sa_input_stream.pipe(line_stream)
+            .pipe(self.sa_work_stream);
 
-        self.sa_input_stream.on('end', function () {
-                //self.sa_log.info('reached the end of input stream');
-                //self.emit('done');
+        pipeline.on('finish', function () {
+                self.sa_log.info('pipeline is finished');
+                self.sync(function (err) {
+                        if (err) {
+                                self.emit('error', err);
+                                return;
+                        }
+                        self.emit('done');
+                });
         });
 
         self.sa_work_stream.on('enough', function () {
@@ -490,6 +497,15 @@ SharkAssign.prototype.lookupObject = function () {
 SharkAssign.prototype.sync = function (callback) {
         var self = this;
 
+        if (self.sa_move.entries.length === 0) {
+                self.sa_log.info({
+                    count: self.sa_move.entries.length,
+                    bytes: self.sa_move.bytes
+                }, 'nothing to sync');
+                callback();
+                return;
+        }
+
         mod_vasync.pipeline({ funcs: [
             function assignNewShark(_, cb) {
                 self.assignNewShark(cb);
@@ -684,7 +700,8 @@ function findObjectOnline(opts, lookup, callback) {
          */
         var concurrency = opts.concurrency || 3;
 
-        var rv = null;
+	var rv = null;
+        var results = null;
         var errors = [];
         /*
          * XXX it would be good if we dropped out of this function as soon as we
@@ -721,7 +738,13 @@ function findObjectOnline(opts, lookup, callback) {
                 });
 
                 req.on('record', function (obj) {
-                        rv = obj;
+			if (!results) {
+				results = {};
+			}
+			if (!results[shard]) {
+				results[shard] = [];
+			}
+                        results[shard].push(obj);
                 });
 
                 req.once('end', function () {
@@ -734,11 +757,67 @@ function findObjectOnline(opts, lookup, callback) {
         queue.close();
 
         queue.on('end', function () {
-                if (!rv) {
+                if (!results) {
                         log.debug({ lookup: lookup }, 'found no object');
-                } else {
-                        log.debug({ object: rv }, 'found object');
-                }
+			callback(mod_verror.errorFromList(errors), rv);
+			return;
+		}
+
+		log.debug({ results: results }, 'results');
+
+		if (Object.keys(results).length === 1 &&
+		    results[Object.keys(results)[0]].length === 1) {
+			/*
+			 * No dups, no snaplinks.  Return the only object.
+			 */
+			rv = results[Object.keys(results)[0]][0];
+			log.debug({ rv: rv }, 'found object');
+			callback(mod_verror.errorFromList(errors), rv);
+			return;
+		}
+
+		var etagConflict = false;
+		var etag = null;
+		var foundSnaplinks = null;
+		mod_jsprim.forEachKey(results, function (shard, objects) {
+			if (objects.length > 1) {
+				/*
+				 * XXX Snaplinks aren't supported yet.
+				 */
+				log.debug({
+				    shard: shard,
+				    objects: objects
+				}, 'snaplinks are not supported yet');
+				foundSnaplinks = true;
+			}
+
+			var object = objects[0];
+			if (!etag) {
+				etag = object._etag;
+			}
+			if (etag !== object._etag) {
+				errors.push(new mod_verror.VError('found ' +
+				    'objects in different shards with unique ' +
+				    'etags'));
+				etagConflict = true;
+			}
+		});
+
+		if (foundSnaplinks) {
+			callback(new mod_verror.VError('snaplinks ' +
+			    'are not supported yet'));
+			return;
+		}
+
+		if (!etagConflict) {
+			log.info({
+			    results: results
+			}, 'found multiple objects in different ' +
+			    'shards, but no etag conflict');
+			rv = results[Object.keys(results)[0]][0];
+		}
+
+		log.debug({ rv: rv }, 'found object');
                 callback(mod_verror.errorFromList(errors), rv);
         });
 }
@@ -814,6 +893,19 @@ function parseOptions(opts) {
                  */
                 opts.target = opts.target * 1024 * 1024 * 1024;
         }
+
+        /*
+         * XXX We could also do with a marker in other situations.  For example,
+         * if a pass has been fully completed and objects moved but we want to
+         * move more based on the same input list, we could make use of a marker
+         * to determine how much of the input to skip, as opposed to reaching
+         * out to the metadata tier for all of them.
+         */
+
+        /*
+         * XXX Split won't do anything if verify is passed.  Prevent both
+         * options?
+         */
 
         return (opts);
 }
