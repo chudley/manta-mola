@@ -37,6 +37,7 @@ function SharkAssign(options) {
         mod_assertplus.string(options.owner, 'options.owner');
         mod_assertplus.arrayOfString(options.shards, 'options.shards');
         mod_assertplus.string(options.storageShard, 'options.storageShard');
+        mod_assertplus.string(options.inputId, 'options.inputId');
         mod_assertplus.optionalString(options.newHost, 'options.newHost');
         mod_assertplus.optionalNumber(options.target, 'options.target');
         mod_assertplus.optionalNumber(options.split, 'options.split');
@@ -51,6 +52,7 @@ function SharkAssign(options) {
         self.sa_owner = options.owner;
         self.sa_metadata_shards = options.shards;
         self.sa_storage_shard = options.storageShard;
+        self.sa_input_id = options.inputId;
         self.sa_target = options.target || null;
         self.sa_split = options.split || 10000;
         self.sa_new_host = options.newHost || null;
@@ -70,7 +72,7 @@ function SharkAssign(options) {
             '/%s/stor/manta_shark_assign/do/%s/',
             self.sa_manta_user, self.sa_host);
 
-        self.sa_progress_fmt = '%d-MOV-X-%d-X-%d-X-%s-X-%s';
+        self.sa_progress_fmt = '%d-MOV-X-%d-X-%d-X-%s-X-%s-X-%s';
 
         self.sa_progress = {
             'bytes': 0,
@@ -321,15 +323,6 @@ SharkAssign.prototype.getProgress = function (callback) {
                         return;
                 }
 
-                if (names.length === 0) {
-                        self.sa_started = new Date();
-                        self.sa_log.info({
-                            progress: self.progress()
-                        }, 'no progress found; starting from scratch');
-                        callback();
-                        return;
-                }
-
                 var seqs = [];
                 var files = {};
                 names.forEach(function (f) {
@@ -338,13 +331,40 @@ SharkAssign.prototype.getProgress = function (callback) {
                         }
                         var s = f.split('-X-');
                         var seq = mod_jsprim.parseInteger(s[0].split('-')[0]);
+
+                        /*
+                         * Only want progress files for this owner.
+                         */
+                        if (s[4] !== self.sa_owner) {
+                                return;
+                        }
+
+                        /*
+                         * Only want progress files for this input ID.
+                         */
+                        if (s[5] !== self.sa_input_id) {
+                                return;
+                        }
+
                         seqs.push(seq);
                         files[seq] = {
                             count: mod_jsprim.parseInteger(s[1]),
                             bytes: mod_jsprim.parseInteger(s[2]),
-                            marker: s[3]
+                            marker: s[3],
+                            owner: s[4],
+                            input_id: s[5]
                         };
                 });
+
+                if (names.length === 0 || seqs.length === 0) {
+                        self.sa_started = new Date();
+                        self.sa_log.info({
+                            progress: self.progress()
+                        }, 'no progress found; starting from scratch');
+                        callback();
+                        return;
+                }
+
 
                 seqs.sort(function (a, b) {
                     return (a - b);
@@ -538,7 +558,9 @@ SharkAssign.prototype.saveProgressManta = function (callback) {
             self.sa_move.entries.length,
             self.sa_move.bytes,
             objectId,
-            self.sa_owner);
+            self.sa_owner,
+            self.sa_input_id
+        );
 
         self.sa_log.info({
             location: self.sa_working_directory + filename
@@ -833,7 +855,7 @@ function parseOptions(opts) {
         var option;
 
         opts.shards = opts.shards || [];
-        var parser = new mod_getopt.BasicParser('o:d:t:x:h:n:V:v',
+        var parser = new mod_getopt.BasicParser('o:d:t:x:h:n:V:i:v',
             process.argv);
         while ((option = parser.getopt()) !== undefined) {
                 if (option.error) {
@@ -870,6 +892,9 @@ function parseOptions(opts) {
                 case 'v':
                         opts.verbose = true;
                         break;
+                case 'i':
+                        opts.inputId = option.optarg;
+                        break;
                 default:
                         usage('Unknown option: ' + option.option);
                         break;
@@ -882,6 +907,15 @@ function parseOptions(opts) {
 
         if (!opts.host) {
                 usage('Host is required.');
+        }
+
+        if (!opts.inputId) {
+                /*
+                 * XXX This is a pretty arbitrary character.  Can this be more
+                 * meaningful if the user doesn't need to use this feature?
+                 * Does it need to be?
+                 */
+                opts.inputId = 'n';
         }
 
         if (opts.target && opts.verify) {
