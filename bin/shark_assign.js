@@ -805,23 +805,25 @@ function findObjectOnline(opts, lookup, callback) {
 
 		var etagConflict = false;
 		var etag = null;
+		var key = null;
 		var foundSnaplinks = null;
 		mod_jsprim.forEachKey(results, function (shard, objects) {
-			if (objects.length > 1) {
-				/*
-				 * XXX Snaplinks aren't supported yet.
-				 */
-				log.debug({
-				    shard: shard,
-				    objects: objects
-				}, 'snaplinks are not supported yet');
-				foundSnaplinks = true;
-			}
-
+			/*
+			 * We don't want any snaplinks, so we just pick the
+			 * first key we see to compare the difference.
+			 */
 			var object = objects[0];
+			if (!key) {
+				key = object.key;
+			}
 			if (!etag) {
 				etag = object._etag;
 			}
+			objects.forEach(function (o) {
+				if (o.key !== key) {
+					foundSnaplinks = true;
+				}
+			});
 			if (etag !== object._etag) {
 				errors.push(new mod_verror.VError('found ' +
 				    'objects in different shards with unique ' +
