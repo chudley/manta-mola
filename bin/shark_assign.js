@@ -703,6 +703,11 @@ function findObjectOnline(opts, lookup, callback) {
 	var rv = null;
         var results = null;
         var errors = [];
+
+	log.debug({
+	    lookup: lookup
+	}, 'starting lookup');
+
         /*
          * XXX it would be good if we dropped out of this function as soon as we
          * get a response, as opposed to waiting for every shard to respond with
@@ -810,7 +815,7 @@ function findObjectOnline(opts, lookup, callback) {
 		}
 
 		if (!etagConflict) {
-			log.info({
+			log.debug({
 			    results: results
 			}, 'found multiple objects in different ' +
 			    'shards, but no etag conflict');
