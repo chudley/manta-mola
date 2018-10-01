@@ -68,9 +68,22 @@ function SharkAssign(options) {
 
         self.sa_manta_user = options.manta.user;
 
-        self.sa_working_directory = mod_util.format(
-            '/%s/stor/manta_shark_assign/do/%s/',
-            self.sa_manta_user, self.sa_host);
+        /*
+         * XXX If newHost && resilver, need to set to /resilver/$newHost
+         */
+        if (self.sa_new_host) {
+                self.sa_working_directory = mod_util.format(
+                    '/%s/stor/manta_shark_assign/update/%s/',
+                    self.sa_manta_user,
+                    self.sa_new_host
+                );
+        } else {
+                self.sa_working_directory = mod_util.format(
+                    '/%s/stor/manta_shark_assign/do/%s/',
+                    self.sa_manta_user,
+                    self.sa_host
+                );
+        }
 
         self.sa_progress_fmt = '%d-MOV-X-%d-X-%d-X-%s-X-%s-X-%s';
 
@@ -681,13 +694,13 @@ SharkAssign.prototype.getProgressNamesManta = function (callback) {
         /*
          * XXX pagination is missing
          */
-        self.sa_manta_client.ls(self.sa_working_directory, { type: 'object' },
+        self.sa_manta_client.ftw(self.sa_working_directory, { type: 'o' },
             function (err, res) {
                 if (err) {
                         callback(err);
                         return;
                 }
-                res.on('object', function (o) {
+                res.on('entry', function (o) {
                         if (o.name.indexOf(self.sa_owner) !== -1) {
                                 names.push(o.name);
                         }
